@@ -2,7 +2,7 @@
 FROM node:22-alpine AS frontend
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npx vite build
 
@@ -13,7 +13,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY migrations/ migrations/
 COPY --from=frontend /app/web/dist/ web/dist/
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release
 
 # Stage 3: Minimal runtime
 FROM debian:bookworm-slim

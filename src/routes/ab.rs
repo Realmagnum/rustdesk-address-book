@@ -1,4 +1,5 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, routing::{get, post}, Json, Router};
+use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -10,6 +11,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/ab", get(get_ab_legacy).post(update_ab_legacy))
+        .route("/api/ab/get", post(get_ab_get))
         .route("/api/ab/personal", get(get_personal))
         .route("/api/ab/shared/profiles", get(get_shared_profiles))
         .route("/api/ab/settings", get(get_ab_settings))
@@ -67,7 +69,43 @@ async fn get_ab_legacy(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<LegacyAbResponse>, ApiError> {
-    let guid = ensure_personal_ab(&state.db, claims.user_id, &claims.sub).await?;
+    let ab_data = build_legacy_ab(&state, claims.user_id, &claims.sub).await?;
+    let data_str = serde_json::to_string(&ab_data)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(LegacyAbResponse { data: data_str }))
+}
+
+/// Response for POST /api/ab/get — the endpoint the current RustDesk client
+/// actually calls when opening the address book tab.
+#[derive(Serialize)]
+struct AbGetResponse {
+    updated_at: i64,
+    data: String,
+}
+
+/// POST /api/ab/get — client-compatible address book fetch.
+/// The official RustDesk client (ab.tis getAb) POSTs to /api/ab/get and
+/// expects { updated_at, data: "<stringified {tags,peers,tag_colors}>" }.
+async fn get_ab_get(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<AbGetResponse>, ApiError> {
+    let ab_data = build_legacy_ab(&state, claims.user_id, &claims.sub).await?;
+    let data_str = serde_json::to_string(&ab_data)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(AbGetResponse {
+        updated_at: chrono::Utc::now().timestamp(),
+        data: data_str,
+    }))
+}
+
+/// Shared logic: build the legacy address book payload for a user.
+async fn build_legacy_ab(
+    state: &AppState,
+    user_id: i64,
+    username: &str,
+) -> Result<LegacyAbData, ApiError> {
+    let guid = ensure_personal_ab(&state.db, user_id, username).await?;
 
     // Fetch all peers
     let peers = sqlx::query_as::<_, crate::models::peer::Peer>(
@@ -117,16 +155,11 @@ async fn get_ab_legacy(
         });
     }
 
-    let ab_data = LegacyAbData {
+    Ok(LegacyAbData {
         tags: tag_names,
         peers: legacy_peers,
         tag_colors: tag_colors_str,
-    };
-
-    let data_str = serde_json::to_string(&ab_data)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    Ok(Json(LegacyAbResponse { data: data_str }))
+    })
 }
 
 /// POST /api/ab — legacy endpoint, replaces the entire address book from a JSON string.

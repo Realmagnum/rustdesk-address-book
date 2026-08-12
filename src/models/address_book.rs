@@ -43,7 +43,14 @@ pub struct LegacyAbResponse {
 pub struct LegacyAbData {
     pub tags: Vec<String>,
     pub peers: Vec<LegacyPeer>,
+    /// The official client does NOT send tag_colors on update —
+    /// treat it as optional to stay compatible with current clients.
+    #[serde(default = "default_tag_colors")]
     pub tag_colors: String,
+}
+
+fn default_tag_colors() -> String {
+    "{}".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]

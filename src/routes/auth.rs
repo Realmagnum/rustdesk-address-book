@@ -12,7 +12,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
-        .route("/api/currentUser", get(current_user))
+        // The RustDesk client POSTs to /api/currentUser; GET kept for API consumers.
+        .route("/api/currentUser", get(current_user).post(current_user))
 }
 
 async fn login(
@@ -82,6 +83,7 @@ async fn current_user(
     .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
 
     Ok(Json(json!({
+        "verifier": "",
         "name": if user.name.is_empty() { user.username } else { user.name },
         "email": user.email,
         "is_admin": user.is_admin,
