@@ -15,13 +15,13 @@ COPY migrations/ migrations/
 COPY --from=frontend /app/web/dist/ web/dist/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release
+    cargo build --release && cp target/release/rustdesk-address-book /app/rustdesk-address-book
 
 # Stage 3: Minimal runtime
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=backend /app/target/release/rustdesk-address-book .
+COPY --from=backend /app/rustdesk-address-book .
 COPY --from=backend /app/migrations/ migrations/
 EXPOSE 21114
 ENV RUSTDESK_AB_DB_PATH=/data/db.sqlite3
