@@ -131,6 +131,21 @@ docker run --rm --entrypoint cargo ab-backend-test test --release --manifest-pat
 - Back up `./data/db.sqlite3` — it holds the entire address book (peers, tags, users).
 - The admin password and JWT secret are read from the environment; never commit them.
 
+## Development
+
+The [`dev`](https://github.com/Realmagnum/rustdesk-address-book/tree/dev) branch carries
+two features beyond `main`:
+
+- **Shared address books with role-based access** — create books and share them with
+  users/groups at read / read-write / admin levels (`POST /api/ab/create`,
+  `POST/DELETE /api/ab/share`, `GET /api/ab/shares`, `GET /api/ab/admin/profiles`);
+  write operations on read-only books return `403`. Web console: *Shared Books* view.
+- **Device auto-registration** — the official client's `POST /api/sysinfo` +
+  `/api/sysinfo_ver` endpoints are implemented, so every workstation registers itself
+  (id, hostname, OS, username, presets). With `RUSTDESK_AB_AUTO_ADD_DEVICES=1` devices
+  enter the owner's personal address book automatically. Web console: *Devices* view
+  with online/offline status.
+
 ## License
 
 [AGPL-3.0](LICENSE) — derivative work of [ds4a/rustdesk-address-book](https://github.com/ds4a/rustdesk-address-book),
