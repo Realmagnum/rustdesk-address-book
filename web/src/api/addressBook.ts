@@ -137,3 +137,49 @@ export function updateGroup(id: number, data: Record<string, any>): Promise<void
 export function deleteGroup(id: number): Promise<void> {
   return api(`/api/groups/${id}`, { method: 'DELETE' })
 }
+
+// ===== Shared books (dev branch) =====
+
+export interface ShareItem {
+  ab_guid: string
+  target: string
+  kind: 'user' | 'group'
+  rule: number
+}
+
+export interface SharedProfilesResponse {
+  data: AbProfile[]
+}
+
+export function createSharedBook(name: string): Promise<{ guid: string; name: string }> {
+  return api('/api/ab/create', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export function getSharedProfiles(): Promise<SharedProfilesResponse> {
+  return api('/api/ab/shared/profiles')
+}
+
+export function getShares(guid: string): Promise<{ data: ShareItem[] }> {
+  return api(`/api/ab/shares?ab=${guid}`)
+}
+
+export function upsertShare(share: { ab_guid: string; user_id?: number; group_id?: number; rule: number }): Promise<void> {
+  return api('/api/ab/share', {
+    method: 'POST',
+    body: JSON.stringify(share),
+  })
+}
+
+export function removeShare(share: { ab_guid: string; user_id?: number; group_id?: number }): Promise<void> {
+  return api('/api/ab/share', {
+    method: 'DELETE',
+    body: JSON.stringify(share),
+  })
+}
+
+export function getAdminProfiles(): Promise<{ data: { guid: string; name: string; owner: string; rule: number; is_personal: boolean }[] }> {
+  return api('/api/ab/admin/profiles')
+}

@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/ab/create", post(create_ab))
         .route("/api/ab/shares", get(list_shares))
         .route("/api/ab/share", post(upsert_share).delete(remove_share))
+        .route("/api/ab/admin/profiles", get(get_admin_profiles))
 }
 
 /// Ensure the user has a personal address book, creating one if needed.
@@ -629,4 +630,45 @@ mod tests {
         assert_eq!(guid, "p1");
         assert_eq!(rule, 3);
     }
+}
+
+/// GET /api/ab/admin/profiles — address books the user owns or administers
+/// (owner, or share with rule 3). Used by the web console's Shared Books view.
+async fn get_admin_profiles(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let rows: Vec<(String, String, String, i32, bool)> = sqlx::query_as(
+        "SELECT ab.guid, ab.name,
+                COALESCE(u.username, '') AS owner,
+                CASE WHEN ab.owner_id = ? THEN 3
+                     ELSE COALESCE((SELECT MAX(s.rule) FROM ab_shares s
+                                    WHERE s.ab_guid = ab.guid
+                                      AND (s.user_id = ? OR s.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?))), 0)
+                END AS rule,
+                ab.is_personal
+         FROM address_books ab
+         LEFT JOIN users u ON ab.owner_id = u.id
+         WHERE ab.owner_id = ?
+            OR EXISTS (SELECT 1 FROM ab_shares s WHERE s.ab_guid = ab.guid
+                       AND (s.user_id = ? OR s.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?))
+                       AND s.rule >= 3)",
+    )
+    .bind(claims.user_id)
+    .bind(claims.user_id)
+    .bind(claims.user_id)
+    .bind(claims.user_id)
+    .bind(claims.user_id)
+    .bind(claims.user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let books: Vec<Value> = rows
+        .into_iter()
+        .filter(|(_, _, _, rule, _)| *rule >= 1)
+        .map(|(guid, name, owner, rule, is_personal)| {
+            json!({ "guid": guid, "name": name, "owner": owner, "rule": rule, "is_personal": is_personal })
+        })
+        .collect();
+    Ok(Json(json!({ "data": books })))
 }
