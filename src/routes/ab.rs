@@ -1,5 +1,9 @@
-use axum::{extract::State, routing::{get, post}, Json, Router};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -15,6 +19,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/ab/personal", get(get_personal).post(get_personal))
         .route("/api/ab/shared/profiles", get(get_shared_profiles).post(get_shared_profiles))
         .route("/api/ab/settings", get(get_ab_settings).post(get_ab_settings))
+        // Shared books management (owner / full-control only)
+        .route("/api/ab/create", post(create_ab))
+        .route("/api/ab/shares", get(list_shares))
+        .route("/api/ab/share", post(upsert_share).delete(remove_share))
 }
 
 /// Ensure the user has a personal address book, creating one if needed.
@@ -289,4 +297,336 @@ async fn get_ab_settings(AuthUser(_claims): AuthUser) -> Json<Value> {
     Json(json!({
         "max_peer_one_ab": 0
     }))
+}
+
+// ================= Access control =================
+
+/// Effective access rule for a user on an address book.
+/// Returns `(guid, rule)` where rule: 1=read-only, 2=read-write, 3=full (admin).
+/// Owner always gets rule 3; otherwise the maximum rule from direct or group shares.
+pub async fn resolve_ab_access(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    ab_guid: &str,
+) -> Result<(String, i32), ApiError> {
+    if ab_guid.is_empty() {
+        // Personal book — full control for its owner.
+        let guid: Option<String> = sqlx::query_scalar(
+            "SELECT guid FROM address_books WHERE owner_id = ? AND is_personal = TRUE",
+        )
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+        let guid = guid
+            .ok_or_else(|| ApiError::NotFound("No personal address book found".to_string()))?;
+        return Ok((guid, 3));
+    }
+
+    let row: Option<(String, i32)> = sqlx::query_as(
+        "SELECT ab.guid,
+                CASE WHEN ab.owner_id = ? THEN 3
+                     ELSE COALESCE((SELECT MAX(s.rule) FROM ab_shares s
+                                    WHERE s.ab_guid = ab.guid
+                                      AND (s.user_id = ? OR s.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?))), 0)
+                END AS rule
+         FROM address_books ab
+         WHERE ab.guid = ?",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .bind(user_id)
+    .bind(ab_guid)
+    .fetch_optional(db)
+    .await?;
+
+    let (guid, rule) = row
+        .ok_or_else(|| ApiError::NotFound("Address book not found".to_string()))?;
+    if rule <= 0 {
+        return Err(ApiError::Forbidden("Access denied to this address book".to_string()));
+    }
+    Ok((guid, rule))
+}
+
+/// Read access (rule >= 1). Returns the resolved guid.
+pub async fn resolve_ab_guid(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    ab_guid: &str,
+) -> Result<String, ApiError> {
+    Ok(resolve_ab_access(db, user_id, ab_guid).await?.0)
+}
+
+/// Write access (rule >= 2). Returns the resolved guid.
+pub async fn resolve_ab_write(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    ab_guid: &str,
+) -> Result<String, ApiError> {
+    let (guid, rule) = resolve_ab_access(db, user_id, ab_guid).await?;
+    if rule < 2 {
+        return Err(ApiError::Forbidden("Address book is read-only".to_string()));
+    }
+    Ok(guid)
+}
+
+/// Full access (rule >= 3, owner or admin share). Returns the resolved guid.
+pub async fn resolve_ab_admin(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    ab_guid: &str,
+) -> Result<String, ApiError> {
+    let (guid, rule) = resolve_ab_access(db, user_id, ab_guid).await?;
+    if rule < 3 {
+        return Err(ApiError::Forbidden("Administrator access required".to_string()));
+    }
+    Ok(guid)
+}
+
+// ================= Shared book management =================
+
+#[derive(Debug, Deserialize)]
+struct CreateAbRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SharesQuery {
+    #[serde(default)]
+    ab: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareRequest {
+    ab_guid: String,
+    #[serde(default)]
+    user_id: Option<i64>,
+    #[serde(default)]
+    group_id: Option<i64>,
+    #[serde(default)]
+    rule: i32,
+}
+
+/// POST /api/ab/create — create a shared address book (the caller becomes owner).
+async fn create_ab(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(req): Json<CreateAbRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("Name is required".to_string()));
+    }
+    let guid = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO address_books (guid, name, owner_id, is_personal) VALUES (?, ?, ?, FALSE)",
+    )
+    .bind(&guid)
+    .bind(name)
+    .bind(claims.user_id)
+    .execute(&state.db)
+    .await?;
+    Ok(Json(json!({ "guid": guid, "name": name })))
+}
+
+/// GET /api/ab/shares?ab=<guid> — list shares of a book (admin only).
+async fn list_shares(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Query(query): Query<SharesQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let guid = resolve_ab_admin(&state.db, claims.user_id, &query.ab).await?;
+    let rows: Vec<(String, Option<String>, String, i32)> = sqlx::query_as(
+        "SELECT s.ab_guid,
+                COALESCE(u.username, g.name, '') AS target,
+                CASE WHEN s.user_id IS NOT NULL THEN 'user' ELSE 'group' END AS kind,
+                s.rule
+         FROM ab_shares s
+         LEFT JOIN users u ON s.user_id = u.id
+         LEFT JOIN groups g ON s.group_id = g.id
+         WHERE s.ab_guid = ?",
+    )
+    .bind(&guid)
+    .fetch_all(&state.db)
+    .await?;
+
+    let shares: Vec<Value> = rows
+        .into_iter()
+        .map(|(ab, target, kind, rule)| {
+            json!({ "ab_guid": ab, "target": target, "kind": kind, "rule": rule })
+        })
+        .collect();
+    Ok(Json(json!({ "data": shares })))
+}
+
+/// POST /api/ab/share — create or update a share (admin only).
+async fn upsert_share(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(req): Json<ShareRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let guid = resolve_ab_admin(&state.db, claims.user_id, &req.ab_guid).await?;
+    if req.user_id.is_none() && req.group_id.is_none() {
+        return Err(ApiError::BadRequest("user_id or group_id is required".to_string()));
+    }
+    if !(1..=3).contains(&req.rule) {
+        return Err(ApiError::BadRequest("rule must be 1 (read), 2 (read-write) or 3 (admin)".to_string()));
+    }
+    let user_id = req.user_id;
+    let group_id = req.group_id;
+    // Upsert: remove existing share for the same target, then insert.
+    sqlx::query(
+        "DELETE FROM ab_shares WHERE ab_guid = ? AND user_id IS ? AND group_id IS ?",
+    )
+    .bind(&guid)
+    .bind(user_id)
+    .bind(group_id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query("INSERT INTO ab_shares (ab_guid, user_id, group_id, rule) VALUES (?, ?, ?, ?)")
+        .bind(&guid)
+        .bind(user_id)
+        .bind(group_id)
+        .bind(req.rule)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(json!({})))
+}
+
+/// DELETE /api/ab/share — remove a share (admin only).
+async fn remove_share(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(req): Json<ShareRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let guid = resolve_ab_admin(&state.db, claims.user_id, &req.ab_guid).await?;
+    let user_id = req.user_id;
+    let group_id = req.group_id;
+    if user_id.is_none() && group_id.is_none() {
+        return Err(ApiError::BadRequest("user_id or group_id is required".to_string()));
+    }
+    sqlx::query("DELETE FROM ab_shares WHERE ab_guid = ? AND user_id IS ? AND group_id IS ?")
+        .bind(&guid)
+        .bind(user_id)
+        .bind(group_id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(json!({})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    async fn test_db() -> sqlx::SqlitePool {
+        let pool = sqlx::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        db::run_migrations(&pool).await;
+        pool
+    }
+
+    async fn seed_user(pool: &sqlx::SqlitePool, username: &str, is_admin: bool) -> i64 {
+        let hash = crate::auth::password::hash_password("pw").unwrap();
+        sqlx::query(
+            "INSERT INTO users (username, password_hash, name, is_admin) VALUES (?, ?, ?, ?)",
+        )
+        .bind(username)
+        .bind(&hash)
+        .bind(username)
+        .bind(is_admin)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar("SELECT id FROM users WHERE username = ?")
+            .bind(username)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn owner_gets_full_access() {
+        let pool = test_db().await;
+        let uid = seed_user(&pool, "alice", true).await;
+        let guid = "book-1";
+        sqlx::query(
+            "INSERT INTO address_books (guid, name, owner_id, is_personal) VALUES (?, 'Shared', ?, FALSE)",
+        )
+        .bind(guid)
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (resolved, rule) = resolve_ab_access(&pool, uid, guid).await.unwrap();
+        assert_eq!(resolved, guid);
+        assert_eq!(rule, 3);
+    }
+
+    #[tokio::test]
+    async fn stranger_is_denied() {
+        let pool = test_db().await;
+        let owner = seed_user(&pool, "alice", false).await;
+        let uid = seed_user(&pool, "bob", false).await;
+        let guid = "book-2";
+        sqlx::query(
+            "INSERT INTO address_books (guid, name, owner_id, is_personal) VALUES (?, 'Shared', ?, FALSE)",
+        )
+        .bind(guid)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(matches!(
+            resolve_ab_access(&pool, uid, guid).await,
+            Err(ApiError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn share_grants_rule_and_blocks_admin() {
+        let pool = test_db().await;
+        let owner = seed_user(&pool, "alice", false).await;
+        let uid = seed_user(&pool, "bob", false).await;
+        let guid = "book-3";
+        sqlx::query(
+            "INSERT INTO address_books (guid, name, owner_id, is_personal) VALUES (?, 'Shared', ?, FALSE)",
+        )
+        .bind(guid)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO ab_shares (ab_guid, user_id, rule) VALUES (?, ?, 2)")
+            .bind(guid)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (_, rule) = resolve_ab_access(&pool, uid, guid).await.unwrap();
+        assert_eq!(rule, 2);
+        assert!(resolve_ab_write(&pool, uid, guid).await.is_ok());
+        assert!(matches!(
+            resolve_ab_admin(&pool, uid, guid).await,
+            Err(ApiError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_guid_resolves_personal_book() {
+        let pool = test_db().await;
+        let uid = seed_user(&pool, "alice", false).await;
+        sqlx::query(
+            "INSERT INTO address_books (guid, name, owner_id, is_personal) VALUES ('p1', 'Personal', ?, TRUE)",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (guid, rule) = resolve_ab_access(&pool, uid, "").await.unwrap();
+        assert_eq!(guid, "p1");
+        assert_eq!(rule, 3);
+    }
 }

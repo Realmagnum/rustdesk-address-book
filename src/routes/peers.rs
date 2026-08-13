@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use crate::auth::middleware::AuthUser;
 use crate::error::ApiError;
 use crate::models::peer::*;
+use crate::routes::ab::{resolve_ab_guid, resolve_ab_write};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -35,45 +36,6 @@ fn default_page_size() -> i64 {
 }
 
 /// Verify the user has access to the given address book guid.
-/// Returns the guid of the personal AB if `ab` is empty.
-pub async fn resolve_ab_guid(
-    db: &sqlx::SqlitePool,
-    user_id: i64,
-    ab_guid: &str,
-) -> Result<String, ApiError> {
-    if ab_guid.is_empty() {
-        // Use personal AB
-        let guid: Option<String> = sqlx::query_scalar(
-            "SELECT guid FROM address_books WHERE owner_id = ? AND is_personal = TRUE",
-        )
-        .bind(user_id)
-        .fetch_optional(db)
-        .await?;
-        return guid.ok_or_else(|| ApiError::NotFound("No personal address book found".to_string()));
-    }
-
-    // Check ownership or share access
-    let has_access: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM address_books ab
-         WHERE ab.guid = ? AND (
-             ab.owner_id = ?
-             OR EXISTS (SELECT 1 FROM ab_shares s WHERE s.ab_guid = ab.guid AND (s.user_id = ? OR s.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?)))
-         )",
-    )
-    .bind(ab_guid)
-    .bind(user_id)
-    .bind(user_id)
-    .bind(user_id)
-    .fetch_one(db)
-    .await?;
-
-    if !has_access {
-        return Err(ApiError::Forbidden("Access denied to this address book".to_string()));
-    }
-
-    Ok(ab_guid.to_string())
-}
-
 async fn get_peers(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -136,7 +98,7 @@ async fn add_peer(
     Path(guid): Path<String>,
     Json(req): Json<AddPeerRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     sqlx::query(
         "INSERT INTO peers (ab_guid, rustdesk_id, hash, username, hostname, platform, alias, note)
@@ -205,7 +167,7 @@ async fn update_peer(
     Path(guid): Path<String>,
     Json(_req): Json<UpdatePeerRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let _guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     // The client typically uses add_peer with upsert semantics for updates.
     // This endpoint exists for compatibility.
@@ -219,7 +181,7 @@ async fn delete_peers(
     Path(guid): Path<String>,
     Json(req): Json<DeletePeersRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     let mut ids_to_delete = req.ids;
     if let Some(id) = req.id {

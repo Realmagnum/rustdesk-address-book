@@ -2,7 +2,7 @@
 
 mod auth;
 mod config;
-mod db;
+pub(crate) mod db;
 mod error;
 mod models;
 mod routes;

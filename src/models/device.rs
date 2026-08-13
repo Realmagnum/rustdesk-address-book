@@ -47,3 +47,18 @@ pub struct AuditRequest {
     #[serde(default)]
     pub note: String,
 }
+
+/// Device row as returned by GET /api/devices.
+#[derive(Debug, sqlx::FromRow)]
+pub struct DeviceRow {
+    pub id: i64,
+    pub rustdesk_id: String,
+    pub hostname: String,
+    pub platform: String,
+    pub os: String,
+    pub cpu: String,
+    pub memory: String,
+    pub version: String,
+    pub username: String,
+    pub last_online: String,
+}
