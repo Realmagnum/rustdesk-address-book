@@ -10,7 +10,7 @@ mod state;
 
 use axum::Router;
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
