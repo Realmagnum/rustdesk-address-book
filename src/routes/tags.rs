@@ -13,7 +13,7 @@ use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/ab/tags/{guid}", get(get_tags))
+        .route("/api/ab/tags/{guid}", get(get_tags).post(get_tags))
         .route("/api/ab/tag/add/{guid}", post(add_tag))
         .route("/api/ab/tag/rename/{guid}", put(rename_tag))
         .route("/api/ab/tag/update/{guid}", put(update_tag_color))
