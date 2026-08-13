@@ -101,17 +101,16 @@ async fn audit(
 // book endpoints.
 
 /// POST /api/sysinfo — full sysinfo upload from the client.
-/// Body is an arbitrary JSON object (serde Value) because the client adds
-/// many optional fields (preset ab_name/ab_tag/ab_alias/ab_note, ...).
+/// The client sends a JSON object with system info plus optional presets
+/// (ab_alias/ab_tag/ab_note/device_group_name); unknown fields are ignored.
 async fn sysinfo_upload(
     State(state): State<AppState>,
-    Json(v): Json<serde_json::Value>,
+    Json(req): Json<SysinfoRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let id = req.id.clone();
     if id.is_empty() {
         return Ok(Json(json!({ "modified_at": "" })));
     }
-    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
 
     sqlx::query(
         "INSERT INTO devices (rustdesk_id, hostname, platform, os, cpu, memory, version, username, last_online)
@@ -127,18 +126,28 @@ async fn sysinfo_upload(
              last_online = CURRENT_TIMESTAMP",
     )
     .bind(&id)
-    .bind(s("hostname"))
-    .bind(s("platform"))
-    .bind(s("os"))
-    .bind(s("cpu"))
-    .bind(s("memory"))
-    .bind(s("version"))
-    .bind(s("username"))
+    .bind(&req.hostname)
+    .bind(&req.platform)
+    .bind(&req.os)
+    .bind(&req.cpu)
+    .bind(&req.memory)
+    .bind(&req.version)
+    .bind(&req.username)
     .execute(&state.db)
     .await?;
 
     if state.config.auto_add_devices {
-        auto_add_device(&state.db, &id, &s("hostname"), &s("username"), &s("platform"), &s).await?;
+        auto_add_device(
+            &state.db,
+            &id,
+            &req.hostname,
+            &req.username,
+            &req.platform,
+            &req.ab_alias,
+            &req.ab_tag,
+            &req.ab_note,
+        )
+        .await?;
     }
 
     // The client expects a modified_at field back.
@@ -154,13 +163,19 @@ async fn sysinfo_ver() -> Json<Value> {
 
 /// Auto-add (or update) a registered device in the first admin's personal book.
 /// Applies client-side presets: ab_alias -> alias, ab_tag -> tag, ab_note -> note.
+///
+/// NOTE: no closure/trait-object parameters — `&dyn Fn` without `Send` held
+/// across an await makes the handler future non-Send, which axum rejects
+/// (Handler bound E0277).
 async fn auto_add_device(
     db: &sqlx::SqlitePool,
     id: &str,
     hostname: &str,
     username: &str,
     platform: &str,
-    get: &dyn Fn(&str) -> String,
+    ab_alias: &str,
+    ab_tag: &str,
+    ab_note: &str,
 ) -> Result<(), ApiError> {
     let owner: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM users WHERE is_admin = TRUE ORDER BY id LIMIT 1",
@@ -177,11 +192,7 @@ async fn auto_add_device(
     .await?;
     let Some(guid) = guid else { return Ok(()); };
 
-    let alias = {
-        let a = get("ab_alias");
-        if a.is_empty() { hostname.to_string() } else { a }
-    };
-    let note = get("ab_note");
+    let alias = if ab_alias.is_empty() { hostname.to_string() } else { ab_alias.to_string() };
 
     sqlx::query(
         "INSERT INTO peers (ab_guid, rustdesk_id, hash, username, hostname, platform, alias, note)
@@ -199,11 +210,11 @@ async fn auto_add_device(
     .bind(hostname)
     .bind(platform)
     .bind(&alias)
-    .bind(&note)
+    .bind(ab_note)
     .execute(db)
     .await?;
 
-    let tag = get("ab_tag");
+    let tag = ab_tag;
     if !tag.is_empty() {
         let existing: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM tags WHERE ab_guid = ? AND name = ?",
@@ -287,7 +298,7 @@ mod tests {
     use crate::db;
 
     async fn test_db() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePoolOptions::new()
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
@@ -320,15 +331,9 @@ mod tests {
         .await
         .unwrap();
 
-        let get = |k: &str| match k {
-            "ab_alias" => "MyMac".to_string(),
-            "ab_tag" => "srv".to_string(),
-            _ => "".to_string(),
-        };
-        auto_add_device(&pool, "999888777", "macbook-pro", "magnum", "macos", &get)
+        auto_add_device(&pool, "999888777", "macbook-pro", "magnum", "macos", "MyMac", "srv", "")
             .await
             .unwrap();
-
         let (id, alias): (String, String) =
             sqlx::query_as("SELECT rustdesk_id, alias FROM peers")
                 .fetch_one(&pool)

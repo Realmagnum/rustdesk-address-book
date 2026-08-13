@@ -30,6 +30,17 @@ pub struct SysinfoRequest {
     pub memory: String,
     #[serde(default)]
     pub version: String,
+    #[serde(default)]
+    pub username: String,
+    // Client presets (OPTION_PRESET_ADDRESS_BOOK_*), used by auto-registration.
+    #[serde(default, rename = "ab_alias")]
+    pub ab_alias: String,
+    #[serde(default, rename = "ab_tag")]
+    pub ab_tag: String,
+    #[serde(default, rename = "ab_note")]
+    pub ab_note: String,
+    #[serde(default, rename = "device_group_name")]
+    pub device_group_name: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -519,7 +519,7 @@ mod tests {
     use crate::db;
 
     async fn test_db() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePoolOptions::new()
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
