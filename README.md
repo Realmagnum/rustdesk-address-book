@@ -1,199 +1,137 @@
-# RustDesk Address Book Server
+# RustDesk Address Book — Maintained Fork
 
-A complete, self-hosted [RustDesk](https://rustdesk.com) server stack — open-source and free. The included Docker Compose file runs the full suite: the OSS rendezvous server (`hbbs`), relay server (`hbbr`), and this address book server, which adds the address book API and web admin console that RustDesk Pro normally charges for.
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](Dockerfile)
 
-## Why?
+A self-hosted **address book server for RustDesk** — an open-source replacement for the
+paid `rustdesk-server-pro` address book / account feature. It implements the RustDesk Pro
+API on port **21114**, which official clients use for address book sync, and works with
+**stock RustDesk clients** — desktop (Sciter) and Android/iOS (Flutter) — no custom client
+builds required.
 
-The RustDesk OSS server handles peer discovery and relay, but has no address book, no user accounts, and no web console — those are Pro-only features. The RustDesk client always tries to connect to port 21114 for address book sync; this server implements that API for free.
+> **Why this fork?** The upstream project [ds4a/rustdesk-address-book](https://github.com/ds4a/rustdesk-address-book)
+> was abandoned (last commit February 2026) with its API emulation out of sync with current
+> RustDesk clients: the address book tab failed to open on desktop and mobile. This fork
+> restores client compatibility, unblocks building with modern toolchains, and hardens the
+> server for production use.
 
-## Features
+---
 
-- **Address book sync** — peers, tags, and tag colours sync directly with the RustDesk desktop/mobile client
-- **Personal & shared address books**
-- **User and group management**
-- **Device tracking** — online/offline status via heartbeat
-- **Audit logging** — connection and login events
-- **Web admin console** — dark/light mode, matches RustDesk's UI style
-- **Single binary** — frontend embedded, no separate web server needed
-- **SQLite** — no external database required
-- **Docker Compose** — one command to run everything
+## What's fixed and improved
 
-## Quick Start
+### Client compatibility — verified against the client source code
 
-### Option A — Full stack (new deployment)
+| Commit | Fix |
+|--------|-----|
+| `e8eec86` | **Desktop client (Sciter, `ui/ab.tis`):** added `POST /api/ab/get` — the endpoint the client's `getAb()` actually calls, returning `{ updated_at, data }`; made `tag_colors` optional on update (clients never send it); `POST /api/currentUser` is now accepted (with the `verifier` field the client expects). |
+| `c2543af` | **Android/iOS client (Flutter, `ab_model.dart`):** the mobile UI sends `POST` on *every* read endpoint (`/api/ab/settings`, `/api/ab/personal`, `/api/ab/shared/profiles`, `/api/ab/peers`, `/api/ab/tags/{guid}`), while the server only accepted `GET`. All read routes now accept both methods. |
 
-Use this if you don't already have a RustDesk server. The Docker Compose file runs everything: rendezvous (`hbbs`), relay (`hbbr`), and the address book server.
+### Build
 
-**Prerequisites:** Docker and Docker Compose installed.
+- `d3dac06` — bumped the Docker build stage from `rust:1.83` (whose Cargo cannot parse
+  crates requiring edition2024, e.g. `base64ct 1.8.3`) to `rust:1-bookworm`.
+- `2bbb724` — fixed the BuildKit cache-mount pitfall (the release binary is copied out of
+  the cache mount so it lands in the image layer).
+- Added BuildKit cache mounts for cargo/npm — rebuilds after small changes take minutes
+  instead of tens of minutes.
+
+### Security hardening
+
+- **Login rate limiting** — in-memory sliding window, 5 attempts/minute per username,
+  `429 Too Many Requests` beyond that (reset on successful login).
+- **Non-root container** — dedicated `rustdesk` system user (uid 10001) in the image;
+  the compose file runs the service as `1000:1000` to match the host data directory owner.
+- **CORS restricted to same-origin** — native RustDesk clients are not subject to CORS,
+  so this does not affect them; it stops arbitrary websites from calling the API.
+- **Honest configuration warnings** — the "no JWT secret" warning now fires only when the
+  secret is genuinely missing (env/config resolved); a loud warning appears if the admin
+  password falls back to the default `admin`.
+- **LICENSE file** — full AGPL-3.0 text added (GitHub license detection now works).
+
+### Tests
+
+- `rate_limit_blocks_after_max_attempts`
+- `rate_limit_resets_after_successful_login`
+- `legacy_ab_accepts_client_payload_without_tag_colors` (client payload compatibility)
+
+---
+
+## Quick start
 
 ```bash
-git clone https://github.com/ds4a/rustdesk-address-book.git
+git clone https://github.com/Realmagnum/rustdesk-address-book.git
 cd rustdesk-address-book
 ```
 
-Create a `.env` file with your secrets:
+### Option A — full stack (new deployment)
+
+The included [docker-compose.yml](docker-compose.yml) runs hbbs (rendezvous),
+hbbr (relay) and the address book in one command:
 
 ```bash
-cat > .env <<EOF
+cat > .env <<'EOF'
 JWT_SECRET=$(openssl rand -hex 32)
-ADMIN_PASSWORD=your-secure-password
+ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -d '=+/')
 EOF
-```
-
-Start everything:
-
-```bash
 docker compose up -d
 ```
 
-This starts three containers:
+### Option B — address book only (existing RustDesk server)
 
-| Container | Ports | Purpose |
-|-----------|-------|---------|
-| `rustdesk-hbbs` | 21115, 21116/tcp+udp, 21118 | Rendezvous / ID server |
-| `rustdesk-hbbr` | 21117, 21119 | Relay server |
-| `rustdesk-address-book` | 21114 | Address book API + web console |
-
-### Option B — Address book only (existing RustDesk server)
-
-Use this if you already have `hbbs`/`hbbr` running. Just run the address book container on the same host — it's completely independent of the relay/rendezvous servers.
-
-```bash
-docker run -d \
-  --name rustdesk-address-book \
-  --restart unless-stopped \
-  -p 21114:21114 \
-  -v $(pwd)/data/ab:/data \
-  -e RUSTDESK_AB_JWT_SECRET=$(openssl rand -hex 32) \
-  -e RUSTDESK_AB_ADMIN_PASSWORD=your-secure-password \
-  ghcr.io/ds4a/rustdesk-address-book:latest
-```
-
-Or add just the `address-book` service to your existing `docker-compose.yml`:
+The address book server is completely independent of hbbs/hbbr — run just the
+`address-book` service from [docker-compose.yml](docker-compose.yml) on the same host:
 
 ```yaml
 services:
   address-book:
-    image: ghcr.io/ds4a/rustdesk-address-book:latest
-    # To build locally instead: build: /path/to/rustdesk-address-book
+    build: .
     container_name: rustdesk-address-book
+    user: "1000:1000"            # non-root; match the owner of ./data
     ports:
       - "21114:21114"
     volumes:
-      - ./data/ab:/data
+      - ./data:/data
     environment:
-      - RUSTDESK_AB_JWT_SECRET=your-secret-here
-      - RUSTDESK_AB_ADMIN_PASSWORD=your-password-here
+      RUSTDESK_AB_DB_PATH: /data/db.sqlite3
+      RUSTDESK_AB_JWT_SECRET: ${JWT_SECRET}
+      RUSTDESK_AB_ADMIN_PASSWORD: ${AB_ADMIN_PASSWORD}
     restart: unless-stopped
 ```
 
-Open the web console at **http://your-server:21114** and log in with `admin` / your `ADMIN_PASSWORD`.
+```bash
+docker compose up -d address-book
+```
 
-> **First run:** A default admin user is created automatically on startup if no users exist.
+The web admin console and the API are served on `http://<host>:21114`; the first-run
+admin account is created from `ADMIN_PASSWORD` / `AB_ADMIN_PASSWORD`.
 
-## Configuring the RustDesk Client
+## Client setup
 
-In the RustDesk client, go to **Settings → Network** and set:
+Set the ID/Relay server in each RustDesk client (e.g. `rustdesk.example.com`). The client
+derives the API server as `<server>:21114` automatically (`get_api_server` in the client
+source) — sign in with an account created in the web console and the address book syncs.
 
-- **ID Server**: `your-server-ip` (or hostname)
-- **API Server**: `http://your-server-ip:21114`
-- **Relay Server**: `your-server-ip`
+| Client | Endpoints used (verified in client source) |
+|--------|---------------------------------------------|
+| Desktop (Sciter, `ui/ab.tis`) | `POST /api/ab/get`, `POST /api/ab`, `POST /api/currentUser` |
+| Android/iOS (Flutter, `ab_model.dart`) | `POST` `/api/ab/settings`, `/api/ab/personal`, `/api/ab/shared/profiles`, `/api/ab/peers`, `/api/ab/tags/{guid}`, `/api/ab/peer/add/{guid}`, `/api/ab/peer/update/{guid}`, `/api/ab/peer/{guid}` |
 
-Leave the Key field empty unless you have configured one on `hbbs`.
-
-Then log in to your account from the client's address book panel — your peers and tags will sync automatically.
-
-## Configuration
-
-All settings can be provided via environment variables or a `config.toml` file (copy `config.toml.example`).
-
-| Environment Variable | Config Key | Default | Description |
-|----------------------|------------|---------|-------------|
-| `RUSTDESK_AB_PORT` | `port` | `21114` | Port to listen on |
-| `RUSTDESK_AB_DB_PATH` | `db_path` | `data/db.sqlite3` | SQLite database path |
-| `RUSTDESK_AB_JWT_SECRET` | `jwt_secret` | *(random)* | JWT signing secret — set this in production |
-| `RUSTDESK_AB_ADMIN_USERNAME` | `admin_username` | `admin` | Initial admin username (first run only) |
-| `RUSTDESK_AB_ADMIN_PASSWORD` | `admin_password` | `admin` | Initial admin password (first run only) |
-| `RUSTDESK_AB_TOKEN_EXPIRY_HOURS` | `token_expiry_hours` | `168` | Token lifetime in hours (default 7 days) |
-
-> If `JWT_SECRET` is not set, a random secret is generated each startup — this means all sessions are invalidated on restart. Always set it in production.
-
-## Running Without Docker
-
-**Prerequisites:** Rust 1.75+, Node.js 22+.
+## Running tests
 
 ```bash
-# Build the frontend
-cd web
-npm install
-npx vite build
-cd ..
-
-# Build and run the backend (frontend is embedded into the binary)
-cargo build --release
-./target/release/rustdesk-address-book
+docker build --target backend -t ab-backend-test .
+docker run --rm --entrypoint cargo ab-backend-test test --release --manifest-path /app/Cargo.toml
 ```
 
-Or with a config file:
+## Security notes
 
-```bash
-cp config.toml.example config.toml
-# Edit config.toml
-./target/release/rustdesk-address-book
-```
-
-## Ports Reference
-
-| Port | Protocol | Service | Required? |
-|------|----------|---------|-----------|
-| 21114 | TCP | Address book API + web console | Yes (this server) |
-| 21115 | TCP | hbbs — NAT type detection | Yes |
-| 21116 | TCP+UDP | hbbs — peer registration / hole punching | Yes |
-| 21117 | TCP | hbbr — relay | Yes |
-| 21118 | TCP | hbbs — WebSocket | Optional |
-| 21119 | TCP | hbbr — WebSocket | Optional |
-
-Make sure these ports are open in your firewall.
-
-## Data
-
-All persistent data is stored under `./data/`:
-
-```
-data/
-├── ab/         # Address book SQLite database
-├── hbbs/       # hbbs keys and peer database
-└── hbbr/       # hbbr configuration
-```
-
-Back up this directory to preserve your data.
-
-## API Compatibility
-
-Implements the RustDesk client API on port 21114:
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/login` | Authenticate, returns Bearer token |
-| `POST /api/logout` | Invalidate session |
-| `GET /api/currentUser` | Current user info |
-| `GET /api/ab/personal` | Get personal address book |
-| `GET /api/ab` | Legacy address book fetch |
-| `POST /api/ab` | Legacy address book update |
-| `GET /api/ab/shared/profiles` | List shared address books |
-| `GET /api/ab/peers` | Fetch peers (paginated) |
-| `POST /api/ab/peer/add/{guid}` | Add peer |
-| `PUT /api/ab/peer/update/{guid}` | Update peer |
-| `DELETE /api/ab/peer/{guid}` | Delete peer(s) |
-| `GET /api/ab/tags/{guid}` | Fetch tags |
-| `POST /api/ab/tag/add/{guid}` | Add tag |
-| `PUT /api/ab/tag/rename/{guid}` | Rename tag |
-| `PUT /api/ab/tag/update/{guid}` | Update tag colour |
-| `DELETE /api/ab/tag/{guid}` | Delete tag(s) |
-| `POST /api/heartbeat` | Device heartbeat |
-| `POST /api/system/sysinfo` | Report device info |
-| `POST /api/audit` | Log audit event |
+- Port `21114` must be reachable by clients; put the server behind a firewall / reverse
+  proxy if you need to restrict access.
+- Back up `./data/db.sqlite3` — it holds the entire address book (peers, tags, users).
+- The admin password and JWT secret are read from the environment; never commit them.
 
 ## License
 
-AGPL-3.0 — same as RustDesk itself.
+[AGPL-3.0](LICENSE) — derivative work of [ds4a/rustdesk-address-book](https://github.com/ds4a/rustdesk-address-book),
+licensed under the same terms.
