@@ -2,45 +2,36 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    #[serde(default = "default_port")]
     pub port: u16,
-    #[serde(default = "default_db_path")]
     pub db_path: String,
-    #[serde(default = "default_jwt_secret")]
     pub jwt_secret: String,
-    #[serde(default = "default_admin_username")]
     pub admin_username: String,
-    #[serde(default = "default_admin_password")]
     pub admin_password: String,
-    #[serde(default = "default_token_expiry_hours")]
     pub token_expiry_hours: u64,
 }
 
-fn default_port() -> u16 {
-    21114
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            port: 21114,
+            db_path: "data/db.sqlite3".to_string(),
+            jwt_secret: String::new(),
+            admin_username: "admin".to_string(),
+            admin_password: String::new(),
+            token_expiry_hours: 168, // 7 days
+        }
+    }
 }
-fn default_db_path() -> String {
-    "data/db.sqlite3".to_string()
-}
-fn default_jwt_secret() -> String {
+
+fn random_jwt_secret() -> String {
     use rand::Rng;
-    let secret: String = rand::thread_rng()
+    rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(64)
         .map(char::from)
-        .collect();
-    tracing::warn!("No JWT secret configured — using random secret (sessions won't survive restarts)");
-    secret
-}
-fn default_admin_username() -> String {
-    "admin".to_string()
-}
-fn default_admin_password() -> String {
-    "admin".to_string()
-}
-fn default_token_expiry_hours() -> u64 {
-    168 // 7 days
+        .collect()
 }
 
 impl Config {
@@ -52,7 +43,7 @@ impl Config {
                 .expect("Failed to read config.toml");
             toml::from_str(&content).expect("Failed to parse config.toml")
         } else {
-            toml::from_str("").unwrap()
+            Config::default()
         };
 
         // Environment variables override config file
@@ -70,6 +61,18 @@ impl Config {
         }
         if let Ok(v) = std::env::var("RUSTDESK_AB_ADMIN_PASSWORD") {
             config.admin_password = v;
+        }
+
+        // Warn only when the secret is genuinely missing after env+file resolution.
+        if config.jwt_secret.is_empty() {
+            tracing::warn!("No JWT secret configured — using random secret (sessions won't survive restarts)");
+            config.jwt_secret = random_jwt_secret();
+        }
+        if config.admin_password.is_empty() {
+            tracing::warn!(
+                "No admin password configured — using default 'admin'. CHANGE IT IMMEDIATELY."
+            );
+            config.admin_password = "admin".to_string();
         }
 
         config

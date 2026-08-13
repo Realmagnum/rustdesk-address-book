@@ -19,10 +19,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Stage 3: Minimal runtime
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin rustdesk
 WORKDIR /app
 COPY --from=backend /app/rustdesk-address-book .
 COPY --from=backend /app/migrations/ migrations/
+RUN mkdir -p /data && chown -R rustdesk:rustdesk /app /data
+# Non-root: the process must not run as root.
+USER rustdesk
 EXPOSE 21114
 ENV RUSTDESK_AB_DB_PATH=/data/db.sqlite3
 VOLUME /data

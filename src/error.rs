@@ -9,6 +9,7 @@ pub enum ApiError {
     Forbidden(String),
     NotFound(String),
     Conflict(String),
+    TooManyRequests(String),
     Internal(String),
 }
 
@@ -20,6 +21,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             ApiError::NotFound(msg) => write!(f, "Not found: {}", msg),
             ApiError::Conflict(msg) => write!(f, "Conflict: {}", msg),
+            ApiError::TooManyRequests(msg) => write!(f, "Too many requests: {}", msg),
             ApiError::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
     }
@@ -33,6 +35,7 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             ApiError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            ApiError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             ApiError::Internal(msg) => {
                 tracing::error!("Internal server error: {}", msg);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())

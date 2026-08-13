@@ -75,3 +75,16 @@ pub struct LegacyPeer {
 pub struct LegacyAbUpdateRequest {
     pub data: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ab_accepts_client_payload_without_tag_colors() {
+        // The official RustDesk client sends {tags, peers} without tag_colors.
+        let data: LegacyAbData = serde_json::from_str(r#"{"tags":["srv"],"peers":[]}"#).unwrap();
+        assert_eq!(data.tag_colors, "{}");
+        assert_eq!(data.tags, vec!["srv"]);
+    }
+}

@@ -10,7 +10,7 @@ mod state;
 
 use axum::Router;
 use std::net::SocketAddr;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -63,11 +63,13 @@ async fn main() {
     let state = AppState {
         db: pool,
         config: config.clone(),
+        login_attempts: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
-    // CORS layer — permissive for development, restrict in production
+    // CORS — same-origin only (web console is served from this app).
+    // Native RustDesk clients are not subject to CORS, so this does not
+    // affect them; it stops random websites from calling the API.
     let cors = CorsLayer::new()
-        .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
