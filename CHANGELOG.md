@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — 2026-09-16
+
+### Added
+
+- Shared address books with role-based access controls and administration in the web console.
+- Device auto-registration endpoints and a Devices view for current RustDesk clients.
+- Standalone HTTPS deployment with Caddy as an alternative to an existing Traefik proxy.
 
 ### Fixed
 
@@ -24,3 +30,5 @@
 
 - Added a production HTTPS deployment runbook for the existing a1 Traefik and Cloudflare
   DNS-01 setup, using `https://ab.rustdesk.rmg7.com` and no public port `21114`.
+- Added a standalone Caddy HTTPS stack (`docker-compose.caddy.yml`, `Caddyfile`, and
+  `.env.caddy.example`) with an operational deployment, validation, and rollback guide.

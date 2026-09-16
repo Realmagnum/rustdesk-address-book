@@ -1,0 +1,9 @@
+{
+	# Replace before first deployment. Caddy uses this address for ACME notices.
+	email {$ACME_EMAIL}
+}
+
+{$ADDRESS_BOOK_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy address-book:21114
+}
