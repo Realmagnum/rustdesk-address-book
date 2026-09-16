@@ -1,6 +1,6 @@
 services:
   hbbs:
-    image: rustdesk/rustdesk-server:latest
+    image: rustdesk/rustdesk-server:1.1.16
     container_name: rustdesk-hbbs
     command: hbbs -r rustdesk-hbbr:21117
     volumes:
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
   hbbr:
-    image: rustdesk/rustdesk-server:latest
+    image: rustdesk/rustdesk-server:1.1.16
     container_name: rustdesk-hbbr
     command: hbbr
     volumes:
@@ -28,12 +28,14 @@ services:
   address-book:
     build: .
     container_name: rustdesk-address-book
+    # Bind locally when TLS is terminated by Traefik/Caddy on this host.
+    # Override with RUSTDESK_AB_BIND=21114 for direct client access.
     ports:
-      - "21114:21114"
+      - "${RUSTDESK_AB_BIND:-127.0.0.1:21114}:21114"
     volumes:
       - ./data/ab:/data
     environment:
       - RUSTDESK_AB_DB_PATH=/data/db.sqlite3
-      - RUSTDESK_AB_JWT_SECRET=${JWT_SECRET:-please-change-this-secret}
-      - RUSTDESK_AB_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - RUSTDESK_AB_JWT_SECRET=${JWT_SECRET:?set a persistent random JWT_SECRET in .env}
+      - RUSTDESK_AB_ADMIN_PASSWORD=${ADMIN_PASSWORD:?set a strong ADMIN_PASSWORD in .env}
     restart: unless-stopped

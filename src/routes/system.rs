@@ -106,10 +106,10 @@ async fn audit(
 async fn sysinfo_upload(
     State(state): State<AppState>,
     Json(req): Json<SysinfoRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<String, ApiError> {
     let id = req.id.clone();
     if id.is_empty() {
-        return Ok(Json(json!({ "modified_at": "" })));
+        return Ok("ID_NOT_FOUND".to_string());
     }
 
     sqlx::query(
@@ -150,15 +150,16 @@ async fn sysinfo_upload(
         .await?;
     }
 
-    // The client expects a modified_at field back.
-    Ok(Json(json!({ "modified_at": "" })))
+    // `hbbs_http::sync` treats this exact text as a successful upload. A JSON
+    // response makes every stock client retry sysinfo on every heartbeat.
+    Ok("SYSINFO_UPDATED".to_string())
 }
 
 /// POST /api/sysinfo_ver — return a version token. The client skips re-uploading
 /// unchanged sysinfo after the first successful upload (hash-based check), so
 /// returning "" is correct: devices re-register only when their info changes.
-async fn sysinfo_ver() -> Json<Value> {
-    Json(json!(""))
+async fn sysinfo_ver() -> String {
+    String::new()
 }
 
 /// Auto-add (or update) a registered device in the first admin's personal book.

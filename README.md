@@ -112,6 +112,11 @@ Set the ID/Relay server in each RustDesk client (e.g. `rustdesk.example.com`). T
 derives the API server as `<server>:21114` automatically (`get_api_server` in the client
 source) — sign in with an account created in the web console and the address book syncs.
 
+For a production deployment, explicitly set **API Server** to a dedicated HTTPS hostname
+such as `https://ab.rustdesk.example.com`; then terminate TLS in a reverse proxy and keep
+port `21114` private. The a1 Traefik deployment runbook is in
+[`docs/https-deployment.md`](docs/https-deployment.md).
+
 | Client | Endpoints used (verified in client source) |
 |--------|---------------------------------------------|
 | Desktop (Sciter, `ui/ab.tis`) | `POST /api/ab/get`, `POST /api/ab`, `POST /api/currentUser` |
