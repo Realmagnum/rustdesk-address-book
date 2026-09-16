@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use crate::auth::middleware::AuthUser;
 use crate::error::ApiError;
 use crate::models::peer::*;
+use crate::routes::ab::{resolve_ab_guid, resolve_ab_write};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -35,45 +36,6 @@ fn default_page_size() -> i64 {
 }
 
 /// Verify the user has access to the given address book guid.
-/// Returns the guid of the personal AB if `ab` is empty.
-pub async fn resolve_ab_guid(
-    db: &sqlx::SqlitePool,
-    user_id: i64,
-    ab_guid: &str,
-) -> Result<String, ApiError> {
-    if ab_guid.is_empty() {
-        // Use personal AB
-        let guid: Option<String> = sqlx::query_scalar(
-            "SELECT guid FROM address_books WHERE owner_id = ? AND is_personal = TRUE",
-        )
-        .bind(user_id)
-        .fetch_optional(db)
-        .await?;
-        return guid.ok_or_else(|| ApiError::NotFound("No personal address book found".to_string()));
-    }
-
-    // Check ownership or share access
-    let has_access: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM address_books ab
-         WHERE ab.guid = ? AND (
-             ab.owner_id = ?
-             OR EXISTS (SELECT 1 FROM ab_shares s WHERE s.ab_guid = ab.guid AND (s.user_id = ? OR s.group_id IN (SELECT group_id FROM user_groups WHERE user_id = ?)))
-         )",
-    )
-    .bind(ab_guid)
-    .bind(user_id)
-    .bind(user_id)
-    .bind(user_id)
-    .fetch_one(db)
-    .await?;
-
-    if !has_access {
-        return Err(ApiError::Forbidden("Access denied to this address book".to_string()));
-    }
-
-    Ok(ab_guid.to_string())
-}
-
 async fn get_peers(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -136,7 +98,7 @@ async fn add_peer(
     Path(guid): Path<String>,
     Json(req): Json<AddPeerRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     sqlx::query(
         "INSERT INTO peers (ab_guid, rustdesk_id, hash, username, hostname, platform, alias, note)
@@ -203,12 +165,68 @@ async fn update_peer(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(guid): Path<String>,
-    Json(_req): Json<UpdatePeerRequest>,
+    Json(req): Json<UpdatePeerRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let _guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
-    // The client typically uses add_peer with upsert semantics for updates.
-    // This endpoint exists for compatibility.
+    let updated = sqlx::query(
+        "UPDATE peers SET
+            hash = COALESCE(?, hash),
+            username = COALESCE(?, username),
+            hostname = COALESCE(?, hostname),
+            platform = COALESCE(?, platform),
+            alias = COALESCE(?, alias),
+            note = COALESCE(?, note),
+            updated_at = CURRENT_TIMESTAMP
+         WHERE ab_guid = ? AND rustdesk_id = ?",
+    )
+    .bind(&req.hash)
+    .bind(&req.username)
+    .bind(&req.hostname)
+    .bind(&req.platform)
+    .bind(&req.alias)
+    .bind(&req.note)
+    .bind(&guid)
+    .bind(&req.id)
+    .execute(&state.db)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound("Peer not found in this address book".to_string()));
+    }
+
+    if let Some(tags) = req.tags {
+        let peer_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM peers WHERE ab_guid = ? AND rustdesk_id = ?",
+        )
+        .bind(&guid)
+        .bind(&req.id)
+        .fetch_one(&state.db)
+        .await?;
+
+        sqlx::query("DELETE FROM peer_tags WHERE peer_id = ?")
+            .bind(peer_id)
+            .execute(&state.db)
+            .await?;
+
+        for tag_name in tags {
+            let tag_id: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM tags WHERE ab_guid = ? AND name = ?",
+            )
+            .bind(&guid)
+            .bind(&tag_name)
+            .fetch_optional(&state.db)
+            .await?;
+
+            if let Some(tag_id) = tag_id {
+                sqlx::query("INSERT OR IGNORE INTO peer_tags (peer_id, tag_id) VALUES (?, ?)")
+                    .bind(peer_id)
+                    .bind(tag_id)
+                    .execute(&state.db)
+                    .await?;
+            }
+        }
+    }
 
     Ok(Json(json!({})))
 }
@@ -219,12 +237,9 @@ async fn delete_peers(
     Path(guid): Path<String>,
     Json(req): Json<DeletePeersRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
-    let mut ids_to_delete = req.ids;
-    if let Some(id) = req.id {
-        ids_to_delete.push(id);
-    }
+    let ids_to_delete = req.into_ids();
 
     for rustdesk_id in &ids_to_delete {
         // Delete peer_tags first

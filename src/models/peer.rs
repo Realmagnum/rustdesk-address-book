@@ -48,9 +48,11 @@ pub struct AddPeerRequest {
     pub note: String,
 }
 
-/// Request to update a peer.
+/// Request to update a peer. RustDesk sends the peer ID plus only the fields
+/// that changed, so every mutable field must remain optional.
 #[derive(Debug, Deserialize)]
 pub struct UpdatePeerRequest {
+    pub id: String,
     #[serde(default)]
     pub hash: Option<String>,
     #[serde(default)]
@@ -67,19 +69,37 @@ pub struct UpdatePeerRequest {
     pub note: Option<String>,
 }
 
+/// RustDesk 1.4.x sends the DELETE payload as a bare JSON array. Older callers
+/// may send an object, so support both shapes at the API boundary.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum DeletePeersRequest {
+    Ids(Vec<String>),
+    Object {
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        id: Option<String>,
+    },
+}
+
+impl DeletePeersRequest {
+    pub fn into_ids(self) -> Vec<String> {
+        match self {
+            Self::Ids(ids) => ids,
+            Self::Object { mut ids, id } => {
+                if let Some(id) = id {
+                    ids.push(id);
+                }
+                ids
+            }
+        }
+    }
+}
+
 /// Response for GET /api/ab/peers.
 #[derive(Debug, Serialize)]
 pub struct PeersResponse {
     pub data: Vec<PeerPayload>,
     pub total: i64,
-}
-
-/// Request to delete peers (can be batch).
-#[derive(Debug, Deserialize)]
-pub struct DeletePeersRequest {
-    #[serde(default)]
-    pub ids: Vec<String>,
-    /// Single ID variant (some client versions send this).
-    #[serde(default)]
-    pub id: Option<String>,
 }

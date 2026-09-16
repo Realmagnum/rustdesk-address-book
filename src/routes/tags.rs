@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use crate::auth::middleware::AuthUser;
 use crate::error::ApiError;
 use crate::models::tag::*;
-use crate::routes::peers::resolve_ab_guid;
+use crate::routes::ab::{resolve_ab_guid, resolve_ab_write};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -52,7 +52,7 @@ async fn add_tag(
     Path(guid): Path<String>,
     Json(req): Json<AddTagRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     sqlx::query("INSERT OR IGNORE INTO tags (ab_guid, name, color) VALUES (?, ?, ?)")
         .bind(&guid)
@@ -70,7 +70,7 @@ async fn rename_tag(
     Path(guid): Path<String>,
     Json(req): Json<RenameTagRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     sqlx::query("UPDATE tags SET name = ? WHERE ab_guid = ? AND name = ?")
         .bind(&req.new)
@@ -88,7 +88,7 @@ async fn update_tag_color(
     Path(guid): Path<String>,
     Json(req): Json<UpdateTagColorRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     sqlx::query("UPDATE tags SET color = ? WHERE ab_guid = ? AND name = ?")
         .bind(req.color)
@@ -106,7 +106,7 @@ async fn delete_tags(
     Path(guid): Path<String>,
     Json(req): Json<DeleteTagRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let guid = resolve_ab_guid(&state.db, claims.user_id, &guid).await?;
+    let guid = resolve_ab_write(&state.db, claims.user_id, &guid).await?;
 
     let mut names = req.names;
     if let Some(name) = req.name {

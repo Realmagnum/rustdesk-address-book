@@ -31,6 +31,18 @@ const router = createRouter({
           meta: { admin: true },
         },
         {
+          path: 'shared-books',
+          name: 'shared-books',
+          component: () => import('../views/SharedBooksView.vue'),
+          meta: { admin: true },
+        },
+        {
+          path: 'devices',
+          name: 'devices',
+          component: () => import('../views/DevicesView.vue'),
+          meta: { admin: true },
+        },
+        {
           path: 'groups',
           name: 'groups',
           component: () => import('../views/GroupsView.vue'),

@@ -1,0 +1,33 @@
+services:
+  address-book:
+    build: .
+    container_name: rustdesk-address-book
+    user: "1000:1000"
+    expose:
+      - "21114"
+    volumes:
+      - ./data:/data
+    environment:
+      RUSTDESK_AB_DB_PATH: /data/db.sqlite3
+      RUSTDESK_AB_JWT_SECRET: ${JWT_SECRET:?set a persistent random JWT_SECRET in .env}
+      RUSTDESK_AB_ADMIN_PASSWORD: ${AB_ADMIN_PASSWORD:?set a strong AB_ADMIN_PASSWORD in .env}
+      RUSTDESK_AB_AUTO_ADD_DEVICES: ${AUTO_ADD_DEVICES:-0}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    container_name: rustdesk-address-book-caddy
+    depends_on:
+      - address-book
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

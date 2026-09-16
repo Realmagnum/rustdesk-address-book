@@ -44,9 +44,16 @@ fn reset_rate_limit(map: &Arc<Mutex<HashMap<String, Vec<Instant>>>>, username: &
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/login", post(login))
+        // Stock 1.4.x clients probe this before rendering optional OIDC login.
+        // This OSS implementation deliberately exposes no third-party methods.
+        .route("/api/login-options", get(login_options))
         .route("/api/logout", post(logout))
         // The RustDesk client POSTs to /api/currentUser; GET kept for API consumers.
         .route("/api/currentUser", get(current_user).post(current_user))
+}
+
+async fn login_options() -> Json<Vec<String>> {
+    Json(Vec::new())
 }
 
 async fn login(

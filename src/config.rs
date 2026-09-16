@@ -10,6 +10,9 @@ pub struct Config {
     pub admin_username: String,
     pub admin_password: String,
     pub token_expiry_hours: u64,
+    /// Auto-register devices (sysinfo/heartbeat) into the owner's personal
+    /// address book. Off by default; enable for zero-touch device discovery.
+    pub auto_add_devices: bool,
 }
 
 impl Default for Config {
@@ -21,6 +24,7 @@ impl Default for Config {
             admin_username: "admin".to_string(),
             admin_password: String::new(),
             token_expiry_hours: 168, // 7 days
+            auto_add_devices: false,
         }
     }
 }
@@ -61,6 +65,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("RUSTDESK_AB_ADMIN_PASSWORD") {
             config.admin_password = v;
+        }
+        if let Ok(v) = std::env::var("RUSTDESK_AB_AUTO_ADD_DEVICES") {
+            config.auto_add_devices = v == "1" || v.eq_ignore_ascii_case("true");
         }
 
         // Warn only when the secret is genuinely missing after env+file resolution.
