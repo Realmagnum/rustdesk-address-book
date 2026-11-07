@@ -271,10 +271,14 @@ async fn list_devices(
     let items: Vec<Value> = devices
         .into_iter()
         .map(|d| {
-            let online = d
-                .last_online
-                .parse::<chrono::NaiveDateTime>()
-                .map(|t| now.signed_duration_since(t).num_seconds() < 90)
+	    let online = chrono::NaiveDateTime::parse_from_str(
+		&d.last_online,
+		"%Y-%m-%d %H:%M:%S",
+	    )
+		.map(|t| {
+		let age = now.signed_duration_since(t).num_seconds();
+		(0..90).contains(&age)
+		})
                 .unwrap_or(false);
             json!({
                 "id": d.rustdesk_id,
